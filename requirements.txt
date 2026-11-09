@@ -1,0 +1,18 @@
+# Python 3.11 baseline. Resolve and freeze the tested environment before experiments.
+ultralytics>=8.4,<9
+opencv-python==4.14.0.94
+# Roboflow requires headless OpenCV; align both distributions sharing cv2.
+opencv-python-headless==4.14.0.94
+roboflow>=1.1,<2
+numpy>=1.26,<3
+matplotlib>=3.8,<4
+torch>=2.2,<3
+jupyterlab>=4.2,<5
+ipykernel>=6.29,<8
+nbformat>=5.10,<6
+pandas>=2.2,<3
+# Explicit solution/tracking dependencies avoid runtime auto-installation.
+shapely>=2.0,<3
+lap>=0.5.12,<0.6
+PyYAML>=6,<7
+Pillow>=10,<14

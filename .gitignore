@@ -1,0 +1,67 @@
+# Environments and Python caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+# Credentials
+.env
+.env.*
+!.env.example
+*credentials*.json
+*service-account*.json
+# Local data and generated artifacts (preserve directory placeholders)
+assets/**
+!assets/**/
+!assets/**/.gitkeep
+datasets/**
+!datasets/**/
+!datasets/**/.gitkeep
+models/**
+!models/**/
+!models/**/.gitkeep
+outputs/**
+!outputs/**/
+!outputs/**/.gitkeep
+runs/
+wandb/
+*.pt
+*.pth
+*.onnx
+*.engine
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.zip
+*.tar
+*.gz
+.DS_Store
+Thumbs.db
+
+# Additional local secrets and exported artifacts
+secrets/
+.streamlit/secrets.toml
+roboflow_config.json
+*.ckpt
+*.safetensors
+*.tflite
+*.webm
+
+# Private keys and local tool configuration
+*.pem
+*.key
+id_rsa
+id_ed25519
+.aws/
+.codex/
+# Additional caches and large local exports
+.ruff_cache/
+.mypy_cache/
+.cache/
+*.cache
+*.npy
+*.npz
+*.h5
+*.hdf5
