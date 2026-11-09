@@ -9,6 +9,8 @@ from pathlib import Path
 import sys
 import tempfile
 import traceback
+import shlex
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -115,7 +117,10 @@ def smoke_notebook():
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id in flags:
-                    assert isinstance(node.value, ast.Constant) and node.value.value is False, target.id
+                    if target.id == "INSTALL_DEPENDENCIES":
+                        assert isinstance(node.value, ast.Name) and node.value.id == "IS_COLAB", target.id
+                    else:
+                        assert isinstance(node.value, ast.Constant) and node.value.value is False, target.id
                     seen.add(target.id)
     assert seen == flags
     # Every model construction/train/val/predict call must be nested under its explicit action flag.
@@ -135,6 +140,31 @@ def smoke_notebook():
         for child in ast.iter_child_nodes(node):
             visit(child, guards)
     visit(tree)
+    # Exercise Colab installation twice using a fake pip magic: no downloads.
+    installation = next("".join(c["source"]) for c in notebook["cells"]
+                        if "installation" in c.get("metadata", {}).get("tags", []))
+    protected = {"torch": "2.14.1+cu130", "torchvision": "0.29.0+cu130", "nvidia-cuda-runtime-cu13": "13.0.0"}
+    distributions = [SimpleNamespace(metadata={"Name": name}, version=value) for name, value in protected.items()]
+    pip_calls = []
+    def fake_pip(magic, command):
+        assert magic == "pip"
+        args = shlex.split(command)
+        assert args[0] == "install"
+        assert not {"--upgrade", "--force-reinstall", "--no-deps"} & set(args)
+        assert not any(arg.split("=")[0] in {"torch", "torchvision", "torchaudio"} for arg in args)
+        constraints = Path(args[args.index("--constraint") + 1]).read_text()
+        for name, value in protected.items():
+            assert f"{name}=={value}" in constraints
+        assert "ultralytics==8.4.208" in args and "roboflow>=1.1,<2" in args
+        pip_calls.append(command)
+    simulated = {"IS_COLAB": True, "Path": Path,
+                 "get_ipython": lambda: SimpleNamespace(run_line_magic=fake_pip)}
+    with patch("importlib.metadata.distributions", return_value=distributions), contextlib.redirect_stdout(io.StringIO()):
+        exec(compile(installation, "colab-install-simulation", "exec"), simulated)
+        exec(compile(installation, "colab-install-rerun-simulation", "exec"), simulated)
+    assert len(pip_calls) == 2
+    assert simulated["GPU_PACKAGES_BEFORE"] == protected
+    print("PASS: simulated Colab pip setup/rerun preserves Torch 2.14.1+cu130 constraints; no pip executed")
     namespace = {}
     output = io.StringIO()
     with contextlib.redirect_stdout(output), patch.object(YOLO, "__init__", side_effect=AssertionError("Model loading forbidden")), patch.object(YOLO, "train", side_effect=AssertionError("Training forbidden")), patch.object(YOLO, "val", side_effect=AssertionError("Validation forbidden")), patch.object(YOLO, "predict", side_effect=AssertionError("Inference forbidden")), patch.object(requests.sessions.Session, "request", side_effect=AssertionError("Network forbidden")):
