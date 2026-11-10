@@ -244,6 +244,8 @@ def create_reviewed_copy(dataset_dir, destination, plan_path):
     if not isinstance(entries, list) or not entries:
         raise ValueError("Plan must explicitly list reviewed file changes")
     source_yaml = locate_yaml(source)
+    if plan.get("source_yaml_sha256") and sha256(source_yaml) != plan["source_yaml_sha256"]:
+        raise ValueError("Dataset YAML changed since visual review")
     config = yaml.safe_load(source_yaml.read_text(encoding="utf-8"))
     names = class_names(config)
     original_inventory = inventory(source)
@@ -270,6 +272,10 @@ def create_reviewed_copy(dataset_dir, destination, plan_path):
         if not replacements:
             raise ValueError("Every plan file requires explicit replacements")
         for replacement in replacements:
+            if "image_sha256" in replacement:
+                reviewed_image = (source / replacement["image"]).resolve()
+                if not reviewed_image.is_relative_to(source) or sha256(reviewed_image) != replacement["image_sha256"]:
+                    raise ValueError("Reviewed image changed; repeat visual review")
             number = replacement["line"]
             if not isinstance(number, int) or number not in invalid_lines or number in used:
                 raise ValueError("Only diagnosed invalid lines may be replaced, once per line")
@@ -312,6 +318,7 @@ def create_reviewed_copy(dataset_dir, destination, plan_path):
         raise RuntimeError("Unexpected copy differences; do not use the copy")
     audit = audit_dataset(destination)
     manifest = {"created_utc": datetime.now(timezone.utc).isoformat(), "original": str(source),
+                "review_provenance": plan.get("review"),
                 "destination": str(destination), "changes": changes, "original_sha256_inventory": original_inventory,
                 "copy_sha256_inventory": copied_inventory, "yaml_change": "Rebased split paths; retained class map; removed optional download/metadata hooks",
                 "ready": audit["ready"], "note": "Only the copy was edited; no image or nonblank annotation row was removed."}

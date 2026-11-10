@@ -1,5 +1,6 @@
 """Offline synthetic regression tests: never use real data, model weights, or training."""
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -9,8 +10,10 @@ from PIL import Image
 import yaml
 from src.fire_smoke import audit_dataset, parse_label, sha256, write_training_yaml
 from src.label_diagnostics import classify_row, create_reviewed_copy, diagnose_labels, inventory, write_diagnosis
+from src.polygon_review import polygon_proposal, prepare_visual_review, write_reviewed_plan
 
 ROOT = Path(__file__).resolve().parents[1]
+os.environ.setdefault("MPLCONFIGDIR", str(ROOT / "outputs" / ".matplotlib"))
 BOX = "0 0.5 0.5 0.4 0.4"
 POLYGON = "0 0.1 0.1 0.4 0.1 0.2 0.4"
 
@@ -170,6 +173,133 @@ class DiagnosticsTests(unittest.TestCase):
         guarded_test_cell = cell.replace("RUN_TRAINING = False", "RUN_TRAINING = True", 1)
         with self.assertRaisesRegex(RuntimeError, "clean dataset audit"):
             exec(compile(guarded_test_cell, "training-gate-negative-test", "exec"), scope)
+
+    def test_polygon_geometry_and_closing_repeat(self):
+        triangle = polygon_proposal(POLYGON, ["fixture"])
+        self.assertEqual(triangle["box_xyxy"], [0.1, 0.1, 0.4, 0.4])
+        for actual, expected in zip(triangle["box_xywh"], [0.25, 0.25, 0.3, 0.3]):
+            self.assertAlmostEqual(actual, expected)
+        closed = polygon_proposal(POLYGON + " 0.1 0.1", ["fixture"])
+        self.assertTrue(closed["repeated_closing_point"])
+        self.assertTrue(closed["nine_token_format_ambiguous"])
+        self.assertEqual(closed["replacement"], triangle["replacement"])
+
+    def test_polygon_rejects_invalid_and_self_intersecting_geometry(self):
+        bad = ["2 0 0 1 0 0 1", "0.0 0 0 1 0 0 1", "0 0 0 1 0 0",
+               "0 nan 0 1 0 0 1", "0 0 0 1.1 0 0 1", "0 0 0 0 0 0 0",
+               "0 0 0 0.1 0.1 0.2 0.2", "0 0 0 1 1 0 1 1 0",
+               "0 0 0 1 0 1 1 1 0 0 1", "0 0 0 0.5 0 0.2 0 1 1 0 1"]
+        for raw in bad:
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                polygon_proposal(raw, ["fixture"])
+
+    def prepare_review(self, row=POLYGON):
+        self.label.write_text(BOX + "\n" + row)
+        saved = self.base / "audit.json"
+        saved.write_text(json.dumps(audit_dataset(self.root)))
+        review = self.base / "visual_review"
+        import matplotlib
+        matplotlib.use("Agg")
+        packet = prepare_visual_review(self.root, saved, review)
+        return review, packet
+
+    def approve_review(self, review, confirmed_format="polygon"):
+        path = review / "decisions.json"
+        decisions = json.loads(path.read_text())
+        decisions["reviewer"] = "Synthetic fixture reviewer"
+        for row in decisions["items"]:
+            row.update(approve=True, matches_visible_object=True, class_confirmed=True,
+                       confirmed_format=confirmed_format, format_evidence="Synthetic source fixture",
+                       reason="Synthetic test approval only; no real image reviewed")
+        path.write_text(json.dumps(decisions))
+
+    def test_visual_review_pending_then_approved_copy(self):
+        review, packet = self.prepare_review()
+        before = inventory(self.root)
+        self.assertEqual(packet["items"][0]["visual_match"], "unreviewed")
+        with Image.open(review / "review_01.png") as preview:
+            self.assertGreater(preview.width, 1000)
+        with self.assertRaises(ValueError):
+            write_reviewed_plan(self.root, review)
+        self.approve_review(review)
+        plan_path = write_reviewed_plan(self.root, review)
+        manifest = create_reviewed_copy(self.root, self.base / "clean", plan_path)
+        self.assertTrue(manifest["ready"])
+        self.assertEqual(manifest["review_provenance"]["reviewer"], "Synthetic fixture reviewer")
+        self.assertEqual(inventory(self.root), before)
+
+    def test_nine_token_review_requires_format_evidence(self):
+        review, packet = self.prepare_review("0 0.1 0.1 0.8 0.1 0.8 0.8 0.1 0.8")
+        self.assertTrue(packet["items"][0]["proposal"]["nine_token_format_ambiguous"])
+        self.approve_review(review, confirmed_format="")
+        with self.assertRaises(ValueError):
+            write_reviewed_plan(self.root, review)
+        self.approve_review(review, confirmed_format="obb")
+        self.assertTrue(write_reviewed_plan(self.root, review).is_file())
+
+    def test_visual_review_rejects_changed_image_and_tampered_proposal(self):
+        review, packet = self.prepare_review()
+        self.approve_review(review)
+        packet["items"][0]["proposal"]["replacement"] = BOX
+        (review / "review.json").write_text(json.dumps(packet))
+        with self.assertRaises(ValueError):
+            write_reviewed_plan(self.root, review)
+        packet["items"][0]["proposal"] = polygon_proposal(POLYGON, ["fixture"])
+        (review / "review.json").write_text(json.dumps(packet))
+        plan = write_reviewed_plan(self.root, review)
+        yaml_path = self.root / "data.yaml"
+        yaml_bytes = yaml_path.read_bytes()
+        yaml_path.write_bytes(yaml_bytes + b"\nreview_changed: true\n")
+        with self.assertRaisesRegex(ValueError, "YAML changed"):
+            create_reviewed_copy(self.root, self.base / "stale_yaml", plan)
+        yaml_path.write_bytes(yaml_bytes)
+        Image.new("RGB", (16, 16), "yellow").save(self.root / "train/images/sample.png")
+        with self.assertRaises(ValueError):
+            create_reviewed_copy(self.root, self.base / "stale", plan)
+
+    def test_blocked_geometry_cannot_be_approved_and_source_output_is_rejected(self):
+        review, packet = self.prepare_review("0 0 0 1 1 0 1 1 0")
+        self.assertIsNone(packet["items"][0]["proposal"])
+        self.approve_review(review)
+        with self.assertRaises(ValueError):
+            write_reviewed_plan(self.root, review)
+        with self.assertRaises(ValueError):
+            prepare_visual_review(self.root, self.base / "audit.json", self.root / "review")
+
+    def test_seven_rows_in_six_files_produce_complete_reviewed_copy(self):
+        import math
+        import matplotlib
+        matplotlib.use("Agg")
+        counts = [119, 11, 11, 13, 17, 9, 11]
+        targets = [("train", "sample", 1), ("valid", "sample", 2), ("test", "sample", 1),
+                   ("test", "two", 1), ("test", "two", 2), ("test", "three", 4), ("test", "four", 1)]
+        labels = {}
+        for index, (count, (split, name, line)) in enumerate(zip(counts, targets)):
+            path = self.root / split / "labels" / (name + ".txt")
+            if path not in labels:
+                labels[path] = [BOX, "0 0.2 0.2 0.1 0.1", "0 0.8 0.8 0.1 0.1"][:line - 1]
+                if name != "sample":
+                    Image.new("RGB", (16, 16), (index * 30, 40, 60)).save(self.root / split / "images" / (name + ".png"))
+            n = (count - 1) // 2
+            values = [v for k in range(n) for v in
+                      (0.5 + 0.3 * math.cos(2 * math.pi * k / n), 0.5 + 0.3 * math.sin(2 * math.pi * k / n))]
+            labels[path].append("0 " + " ".join(map(str, values)))
+        for path, rows in labels.items():
+            path.write_text("\n".join(rows + ["0 0.9 0.1 0.05 0.05"]))
+        saved = self.base / "audit.json"
+        saved.write_text(json.dumps(audit_dataset(self.root)))
+        review = self.base / "seven_review"
+        packet = prepare_visual_review(self.root, saved, review)
+        self.assertEqual(len(packet["items"]), 7)
+        self.assertEqual(len({i["path"] for i in packet["items"]}), 6)
+        self.assertEqual(sorted(i["proposal"]["token_count"] for i in packet["items"]), sorted(counts))
+        before = inventory(self.root)
+        self.approve_review(review)
+        plan = write_reviewed_plan(self.root, review)
+        clean = self.base / "seven_clean"
+        self.assertTrue(create_reviewed_copy(self.root, clean, plan)["ready"])
+        self.assertEqual(audit_dataset(clean)["issues"], [])
+        self.assertEqual(inventory(self.root), before)
 
 
 if __name__ == "__main__":

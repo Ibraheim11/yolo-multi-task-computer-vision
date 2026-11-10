@@ -51,6 +51,8 @@ This runs a full image/label audit and prints every invalid raw line, token coun
 
 ## 4. Review recovery and create a separate copy only after approval
 
+**For the confirmed diagnostic findings of seven polygon-like rows, use [the dedicated visual-review procedure](POLYGON_RECOVERY_COLAB.md) for this step.** It saves overlays, explicit decisions, the reviewed plan, manifest, and full clean audit to Drive. The generic plan/copy example below remains supported but does not itself perform image review.
+
 Open each affected original image and label in an annotation viewer. A candidate polygon is potentially recoverable only after confirming source format, class, object identity and coordinates. A confirmed polygon's enclosing box is `(min(x)+max(x))/2, (min(y)+max(y))/2, max(x)-min(x), max(y)-min(y)`. This loses mask/orientation detail. A nine-token row can also be an OBB. Degenerate, self-intersecting, truncated, concatenated, nonfinite or unknown-format rows require source review or re-export; never truncate or clip them automatically.
 
 Follow the [explicit reviewed-plan schema](FIRE_SMOKE_LABEL_DIAGNOSIS.md#explicit-reviewed-copy-plan). The reviewer supplies one justified strict detection replacement per invalid row and the diagnosed original file hash. Do not fabricate a plan while raw rows are unavailable. Keep the plan outside the original export. No automatic repair occurs.
