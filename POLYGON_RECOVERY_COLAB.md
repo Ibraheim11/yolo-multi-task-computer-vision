@@ -1,5 +1,7 @@
 # Fire & Smoke polygon recovery: reviewed Colab workflow
 
+For the current seven pending decisions, first follow [Phase 2C read-only COCO provenance verification](PHASE2C_PROVENANCE_COLAB.md). Reuse the existing review packet and preserve decisions; do not rerun the decision-writing loop while investigating provenance.
+
 The user reports seven polygon-like rows, token counts **119, 11, 11, 13, 17, 9, 11**, in six files, all reconciled as `still_invalid`, with no additional audit issues. This is diagnostic evidence, not confirmation that any polygon matches a visible object. No real image review, conversion or clean-dataset audit has been performed locally.
 
 The original `create_reviewed_copy` schema remains compatible: `files` contains relative label paths, original SHA-256 hashes, and one-based line replacements with exact original text and a reason. The new workflow fills that schema only after explicit human review. Added review metadata records image hashes and reviewer decisions; the copy manifest retains it. Nothing runs training or inference.
